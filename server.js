@@ -11,31 +11,14 @@ const { MercadoPagoConfig, Preference } = require('mercadopago');
 
 // 2. Configuração inicial
 const app = express();
-const PORT = process.env.PORT || 3000; // Render define a porta automaticamente
-
-// ==================== CORS SEGURO ====================
-// Substitui: app.use(cors());
-const whitelist = [
-  process.env.FRONTEND_URL, // URL do frontend em produção
-  'http://localhost:3000',  // URL do frontend local (desenvolvimento)
-];
-const corsOptions = {
-  origin: function(origin, callback) {
-    if (!origin || whitelist.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Não permitido pela política de CORS'));
-    }
-  },
-  credentials: true // necessário se usar cookies ou credenciais
-};
-app.use(cors(corsOptions));
-// =======================================================
+const PORT = process.env.PORT || 3000; // O Render define a porta automaticamente
 
 // Middlewares
-app.use(express.json()); // Permite JSON no corpo das requisições
+app.use(cors()); // Libera o CORS para qualquer origem
+app.use(express.json()); // Permite que o Express entenda JSON no corpo das requisições
 
 // Carrega variáveis de ambiente do arquivo .env (em desenvolvimento)
+// Em produção (Render), as variáveis são configuradas na plataforma.
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -60,11 +43,13 @@ const CONFIG = {
 };
 
 // ==================== INICIALIZAÇÃO DOS SERVIÇOS ====================
+
+// Autenticação com Google Sheets
 const serviceAccountAuth = new JWT({
   email: CONFIG.google.serviceAccountEmail,
   key: CONFIG.google.privateKey,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
+} );
 const docProdutos = new GoogleSpreadsheet(CONFIG.google.planilhaProdutosId, serviceAccountAuth);
 const docPedidos = new GoogleSpreadsheet(CONFIG.google.planilhaPedidosId, serviceAccountAuth);
 
@@ -73,19 +58,23 @@ const mpClient = new MercadoPagoConfig({ accessToken: CONFIG.mercadoPago.accessT
 const preference = new Preference(mpClient);
 
 // ==================== FUNÇÕES AUXILIARES ====================
+
+// Função para carregar produtos da planilha
 async function getProdutos() {
   await docProdutos.loadInfo();
   const sheet = docProdutos.sheetsByIndex[0];
   const rows = await sheet.getRows();
-
+  
+  // Mapeia as linhas para o formato de objeto que o frontend espera
   const produtos = rows.map(row => {
     const produtoData = row.toObject();
+    // Coleta todas as URLs de imagem em um array
     const imagens = [];
     for (let i = 1; i <= 5; i++) {
       if (produtoData[`url_imagem${i}`]) imagens.push(produtoData[`url_imagem${i}`]);
       if (produtoData[`urlimagem${i}`]) imagens.push(produtoData[`urlimagem${i}`]);
     }
-
+    
     return {
       ID: produtoData.id,
       Nome: produtoData.nome,
@@ -96,12 +85,13 @@ async function getProdutos() {
       Imagens: imagens,
       URL_Imagem: imagens[0] || 'https://via.placeholder.com/300x300?text=Sem+Imagem',
     };
-  });
-
+  } );
   return produtos;
 }
 
 // ==================== ENDPOINTS DA API ====================
+
+// Endpoint de teste para verificar se o servidor está no ar
 app.get('/', (req, res) => {
   res.status(200).json({
     mensagem: "Backend da Loja da Profe funcionando!",
@@ -110,6 +100,7 @@ app.get('/', (req, res) => {
   });
 });
 
+// Endpoint para buscar todos os produtos
 app.get('/produtos', async (req, res) => {
   try {
     const produtos = await getProdutos();
@@ -120,6 +111,7 @@ app.get('/produtos', async (req, res) => {
   }
 });
 
+// Endpoint para buscar um produto por ID
 app.get('/produtos/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -137,6 +129,7 @@ app.get('/produtos/:id', async (req, res) => {
   }
 });
 
+// Endpoint para criar uma preferência de pagamento no Mercado Pago
 app.post('/create_preference', async (req, res) => {
   try {
     const { items, payer } = req.body;
@@ -164,6 +157,7 @@ app.post('/create_preference', async (req, res) => {
           pending: CONFIG.urls.pendente,
         },
         auto_return: 'approved',
+        // A URL de notificação deve ser a URL pública do seu backend no Render
         notification_url: `${req.protocol}://${req.get('host')}/webhook_mp?secret=${CONFIG.mercadoPago.webhookSecret}`,
       }
     };
@@ -182,7 +176,9 @@ app.post('/create_preference', async (req, res) => {
   }
 });
 
+// Endpoint para receber webhooks do Mercado Pago
 app.post('/webhook_mp', async (req, res) => {
+  // Valida o secret do webhook
   if (req.query.secret !== CONFIG.mercadoPago.webhookSecret) {
     console.warn("Webhook recebido com secret inválido.");
     return res.status(403).send("Acesso negado.");
@@ -193,16 +189,26 @@ app.post('/webhook_mp', async (req, res) => {
   if (type === 'payment') {
     const paymentId = data.id;
     console.log(`Webhook de pagamento recebido para o ID: ${paymentId}`);
-
+    
+    // Aqui você implementaria a lógica para buscar os detalhes do pagamento
+    // e salvar o pedido na sua planilha de "Pedidos"
     try {
-      console.log("Processando pagamento aprovado (lógica a ser implementada)...");
+        // Exemplo:
+        // const paymentDetails = await mercadopago.payment.findById(paymentId);
+        // if (paymentDetails.body.status === 'approved') {
+        //   await salvarPedidoAprovado(paymentDetails.body);
+        // }
+        console.log("Processando pagamento aprovado (lógica a ser implementada)...");
+
     } catch (error) {
-      console.error("Erro ao processar webhook:", error);
+        console.error("Erro ao processar webhook:", error);
     }
   }
 
+  // Responde ao Mercado Pago que o webhook foi recebido com sucesso
   res.status(200).send("Webhook recebido.");
 });
+
 
 // ==================== INICIALIZAÇÃO DO SERVIDOR ====================
 app.listen(PORT, () => {
